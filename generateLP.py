@@ -25,7 +25,7 @@ class LPGenerator:
         print("Added Constraints")
         self.add_objective_function()
         print("Created LP")
-        # self.write_lp()
+        self.write_lp()
         self.solve_lp()
 
     def create_gurobi_model(self):
@@ -63,47 +63,49 @@ class LPGenerator:
 
         for s in self.stormpy_model.states:
             indices.append(s.id)
-            names.append("xs(" + str(s.id) + ")")
+            names.append("ys(" + str(s.id) + ")")
 
         self.ys_var = self.gurobi_model.addVars(indices, lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name=names)
 
     def add_constraints(self):
-        self.add_constraint_1()
-        print("Constraint 1 added")
+        self.add_constraint_1_and_4()
+        print("Constraint 1 and 4 added")
         self.add_constraint_2()
         print("Constraint 2 added")
         self.add_constraint_3()
         print("Constraint 3 added")
-        self.add_constraint_4()
-        print("Constraint 4 added")
 
-    def add_constraint_1(self):
-        for s in self.stormpy_model.states:
-            self.add_constraint_1_for_state(s)
+    def add_constraint_1_and_4(self):
+        lhs_constraint_1_exprs = [gp.LinExpr() for _ in range(self.stormpy_model.nr_states)]
+        rhs_constraint_1_exprs = [gp.LinExpr() for _ in range(self.stormpy_model.nr_states)]
+        lhs_constraint_4_exprs = [gp.LinExpr() for _ in range(self.stormpy_model.nr_states)]
+        rhs_constraint_4_exprs = [gp.LinExpr() for _ in range(self.stormpy_model.nr_states)]
 
-    def add_constraint_1_for_state(self, state):
-        lhs_expr = self.get_constraint_1_lhs_for_state(state)
-        rhs_expr = self.get_constraint_1_rhs_for_state(state)
-        self.gurobi_model.addLConstr(lhs_expr, GRB.EQUAL, rhs_expr, name="C1(" + str(state.id) + ")")
+        for state in self.stormpy_model.states:
+            # Add 1 if initial state
+            if state.id in self.stormpy_model.initial_states:
+                lhs_constraint_1_exprs[state.id].addConstant(1)
 
-    def get_constraint_1_lhs_for_state(self, state):
-        linear_expr = gp.LinExpr()
+            # Add ys
+            rhs_constraint_1_exprs[state.id].add(self.ys_var[state.id])
 
-        if state.id in self.stormpy_model.initial_states:
-            linear_expr.addConstant(1)
+            for action in state.actions:
+                rhs_constraint_1_exprs[state.id].add(self.ya_var[state.id, action.id], 1)
+                rhs_constraint_4_exprs[state.id].add(self.xa_var[state.id, action.id], 1)
+                for transition in action.transitions:
+                    prob = transition.value()
+                    next_state = transition.column
 
-        self.for_each_incoming_transition(state, lambda source_state, action, prob, target_id: linear_expr.add(
-            self.ya_var[source_state.id, action.id], prob))
+                    lhs_constraint_1_exprs[next_state].add(self.ya_var[state.id, action.id], prob)
+                    lhs_constraint_4_exprs[next_state].add(self.xa_var[state.id, action.id], prob)
 
-        return linear_expr
+        for i in range(self.stormpy_model.nr_states):
+            self.gurobi_model.addLConstr(lhs_constraint_1_exprs[i], GRB.EQUAL, rhs_constraint_1_exprs[i],
+                                         name="C1(" + str(i) + ")")
 
-    def get_constraint_1_rhs_for_state(self, state):
-        linear_expr = gp.LinExpr()
-        for a in state.actions:
-            linear_expr.add(self.ya_var[state.id, a.id], 1)
-
-        linear_expr.add(self.ys_var[state.id], 1)
-        return linear_expr
+        for i in range(self.stormpy_model.nr_states):
+            self.gurobi_model.addLConstr(lhs_constraint_4_exprs[i], GRB.EQUAL, rhs_constraint_4_exprs[i],
+                                         name="C4(" + str(i) + ")")
 
     def add_constraint_2(self):
         linear_expr = gp.LinExpr()
@@ -142,30 +144,6 @@ class LPGenerator:
                 linear_constraint.add(self.xa_var[state_id, action.id], 1)
 
         return linear_constraint
-
-    def add_constraint_4(self):
-        for state in self.stormpy_model.states:
-            self.add_constraint_4_for_state(state)
-
-    def add_constraint_4_for_state(self, state):
-        lhs_expr = self.get_lhs_constraint_4_for_state(state)
-        rhs_expr = self.get_rhs_constraint_4_for_state(state)
-
-        self.gurobi_model.addLConstr(lhs_expr, GRB.EQUAL, rhs_expr, name="C4(" + str(state.id) + ")")
-
-    def get_lhs_constraint_4_for_state(self, state):
-        linear_expr = gp.LinExpr()
-        self.for_each_incoming_transition(state, lambda source, action, prob, target: linear_expr.add(
-            self.xa_var[source.id, action.id], prob))
-
-        return linear_expr
-
-    def get_rhs_constraint_4_for_state(self, state):
-        linear_expr = gp.LinExpr()
-        for action in state.actions:
-            linear_expr.add(self.xa_var[state.id, action.id], 1)
-
-        return linear_expr
 
     def add_objective_function(self):
         linear_expr = gp.LinExpr()
