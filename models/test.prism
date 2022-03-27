@@ -1,0 +1,21 @@
+mdp
+
+module test
+    x: [0..3] init 0;
+
+    [a0] x<3 -> (x'=x+1);
+    [a0] x=3 -> (x'=0);
+    [a1] x>0 -> (x'=x-1);
+    [a1] x=0 -> (x'=3);
+endmodule
+
+rewards
+    [a0] x=0 : 0;
+    [a0] x=1 : 1;
+    [a0] x=2 : 2;
+    [a0] x=3 : 3;
+    [a1] x=0 : 4;
+    [a1] x=1 : 5;
+    [a1] x=2 : 6;
+    [a1] x=3 : 7;
+endrewards
