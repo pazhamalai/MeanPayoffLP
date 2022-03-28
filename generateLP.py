@@ -12,20 +12,30 @@ class LPGenerator:
         self.stormpy_model = model
         self.stormpy_model_name = name
 
+        # Initialize variables
         self.ya_var = None
         self.xa_var = None
         self.ys_var = None
 
+        # Initialize rewards
+        self.reward_model_name = list(self.stormpy_model.reward_models.keys())[0]
+        self.reward_model = self.stormpy_model.reward_models[self.reward_model_name]
+        self.has_state_rewards = self.reward_model.has_state_rewards
+        self.has_state_action_rewards = self.reward_model.has_state_action_rewards
+
+        self.state_rewards = self.reward_model.state_rewards if self.has_state_rewards else None
+        self.state_action_rewards = self.reward_model.state_action_rewards if self.has_state_action_rewards else None
+
+    def get_state_reward(self, state_id):
+        return self.state_rewards[state_id] if self.has_state_rewards else 0
+
+    def get_state_action_reward(self, index):
+        return self.state_action_rewards[index] if self.has_state_action_rewards else 0
+
     def generate(self):
         self.create_gurobi_model()
-        print("Model Created")
         self.init_variables()
-        print("Variables Initialized")
-        self.add_constraints()
-        print("Added Constraints")
-        self.add_objective_function()
-        print("Created LP")
-        # self.write_lp()
+        self.populate_lp()
         self.solve_lp()
 
     def create_gurobi_model(self):
@@ -33,53 +43,46 @@ class LPGenerator:
         self.decompositions = stormpy.get_maximal_end_components(self.stormpy_model)
 
     def init_variables(self):
-        self.init_ya_variable()
-        self.init_xa_variable()
-        self.init_ys_variable()
+        ya_indices, ya_names = [], []
+        xa_indices, xa_names = [], []
+        ys_indices, ys_names = [], []
 
-    def init_ya_variable(self):
-        indices = []
-        names = []
         for s in self.stormpy_model.states:
+            # ys variables
+            ys_indices.append(s.id)
+            ys_names.append("ys(" + str(s.id) + ")")
+
             for a in s.actions:
-                indices.append((s.id, a.id))
-                names.append("ya(" + str(s.id) + ", " + str(a.id) + ")")
+                # ya variables
+                ya_indices.append((s.id, a.id))
+                ya_names.append("ya(" + str(s.id) + ", " + str(a.id) + ")")
 
-        self.ya_var = self.gurobi_model.addVars(indices, lb=0.0, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name=names)
+                # xa variables
+                xa_indices.append((s.id, a.id))
+                xa_names.append("xa(" + str(s.id) + ", " + str(a.id) + ")")
 
-    def init_xa_variable(self):
-        indices = []
-        names = []
-        for s in self.stormpy_model.states:
-            for a in s.actions:
-                indices.append((s.id, a.id))
-                names.append("xa(" + str(s.id) + ", " + str(a.id) + ")")
+        self.ya_var = self.gurobi_model.addVars(ya_indices, lb=0.0, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name=ya_names)
+        self.xa_var = self.gurobi_model.addVars(xa_indices, lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name=xa_names)
+        self.ys_var = self.gurobi_model.addVars(ys_indices, lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name=ys_names)
 
-        self.xa_var = self.gurobi_model.addVars(indices, lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name=names)
-
-    def init_ys_variable(self):
-        indices = []
-        names = []
-
-        for s in self.stormpy_model.states:
-            indices.append(s.id)
-            names.append("ys(" + str(s.id) + ")")
-
-        self.ys_var = self.gurobi_model.addVars(indices, lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name=names)
-
-    def add_constraints(self):
-        self.add_constraint_1_and_4()
-        print("Constraint 1 and 4 added")
+    def populate_lp(self):
+        self.add_constraint_1_4_and_objective_function()
         self.add_constraint_2()
-        print("Constraint 2 added")
         self.add_constraint_3()
-        print("Constraint 3 added")
 
-    def add_constraint_1_and_4(self):
+    # Visits each transition once and creates constraints 1, 4 and objective functions
+    # At last adds the constraints and objective function to gurobi model
+    def add_constraint_1_4_and_objective_function(self):
         lhs_constraint_1_exprs = [gp.LinExpr() for _ in range(self.stormpy_model.nr_states)]
         rhs_constraint_1_exprs = [gp.LinExpr() for _ in range(self.stormpy_model.nr_states)]
         lhs_constraint_4_exprs = [gp.LinExpr() for _ in range(self.stormpy_model.nr_states)]
         rhs_constraint_4_exprs = [gp.LinExpr() for _ in range(self.stormpy_model.nr_states)]
+
+        # variables for objective functions
+        obj_linear_expr = gp.LinExpr()
+        actions_counter = 0
+        obj_vars = []
+        obj_coeffs = []
 
         for state in self.stormpy_model.states:
             # Add 1 if initial state
@@ -89,9 +92,19 @@ class LPGenerator:
             # Add ys
             rhs_constraint_1_exprs[state.id].add(self.ys_var[state.id])
 
+            state_reward = self.get_state_reward(state.id)
+
             for action in state.actions:
                 rhs_constraint_1_exprs[state.id].add(self.ya_var[state.id, action.id], 1)
                 rhs_constraint_4_exprs[state.id].add(self.xa_var[state.id, action.id], 1)
+
+                # Update objective function variables
+                state_action_reward = self.get_state_action_reward(actions_counter)
+                total_reward = state_reward + state_action_reward
+                obj_vars.append(self.xa_var[state.id, action.id])
+                obj_coeffs.append(total_reward)
+                actions_counter = actions_counter + 1
+
                 for transition in action.transitions:
                     prob = transition.value()
                     next_state = transition.column
@@ -99,13 +112,19 @@ class LPGenerator:
                     lhs_constraint_1_exprs[next_state].add(self.ya_var[state.id, action.id], prob)
                     lhs_constraint_4_exprs[next_state].add(self.xa_var[state.id, action.id], prob)
 
+        # Set Constraint 1
         for i in range(self.stormpy_model.nr_states):
             self.gurobi_model.addLConstr(lhs_constraint_1_exprs[i], GRB.EQUAL, rhs_constraint_1_exprs[i],
                                          name="C1(" + str(i) + ")")
 
+        # Set Constraint 4
         for i in range(self.stormpy_model.nr_states):
             self.gurobi_model.addLConstr(lhs_constraint_4_exprs[i], GRB.EQUAL, rhs_constraint_4_exprs[i],
                                          name="C4(" + str(i) + ")")
+
+        # Set objective function
+        obj_linear_expr.addTerms(obj_coeffs, obj_vars)
+        self.gurobi_model.setObjective(obj_linear_expr, GRB.MAXIMIZE)
 
     def add_constraint_2(self):
         linear_expr = gp.LinExpr()
@@ -144,48 +163,6 @@ class LPGenerator:
                 linear_constraint.add(self.xa_var[state_id, action.id], 1)
 
         return linear_constraint
-
-    def add_objective_function(self):
-        reward_model_name = list(self.stormpy_model.reward_models.keys())[0]
-        reward_model = self.stormpy_model.reward_models[reward_model_name]
-        has_state_rewards = reward_model.has_state_rewards
-        has_state_action_rewards = reward_model.has_state_action_rewards
-
-        if has_state_rewards:
-            state_rewards = reward_model.state_rewards
-        else:
-            state_rewards = None
-
-        if has_state_action_rewards:
-            state_action_rewards = reward_model.state_action_rewards
-        else:
-            state_action_rewards = None
-
-        linear_expr = gp.LinExpr()
-        counter = 0
-        xa_vars = []
-        coeffs = []
-        print("Created objective variables")
-        for state in self.stormpy_model.states:
-            if has_state_rewards:
-                state_reward = state_rewards[state.id]
-            else:
-                state_reward = 0
-
-            for action in state.actions:
-                if has_state_action_rewards:
-                    state_action_reward = state_action_rewards[counter]
-                else:
-                    state_action_reward = 0
-                total_reward = state_reward + state_action_reward
-                xa_vars.append(self.xa_var[state.id, action.id])
-                coeffs.append(total_reward)
-                counter = counter + 1
-
-        print("Computed values")
-
-        linear_expr.addTerms(coeffs, xa_vars)
-        self.gurobi_model.setObjective(linear_expr, GRB.MAXIMIZE)
 
     def solve_lp(self):
         self.gurobi_model.optimize()
