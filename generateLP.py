@@ -25,7 +25,7 @@ class LPGenerator:
         print("Added Constraints")
         self.add_objective_function()
         print("Created LP")
-        self.write_lp()
+        # self.write_lp()
         self.solve_lp()
 
     def create_gurobi_model(self):
@@ -146,35 +146,46 @@ class LPGenerator:
         return linear_constraint
 
     def add_objective_function(self):
-        linear_expr = gp.LinExpr()
-        counter = 0
-        for state in self.stormpy_model.states:
-            state_reward = self.get_state_reward(state.id)
-            for action in state.actions:
-                state_action_reward = self.get_state_action_reward(counter)
-                total_reward = state_reward + state_action_reward
-                linear_expr.add(self.xa_var[state.id, action.id], total_reward)
-                counter = counter + 1
-
-        self.gurobi_model.setObjective(linear_expr, GRB.MAXIMIZE)
-
-    def get_state_reward(self, state_id):
         reward_model_name = list(self.stormpy_model.reward_models.keys())[0]
-        has_state_rewards = self.stormpy_model.reward_models[reward_model_name].has_state_rewards
+        reward_model = self.stormpy_model.reward_models[reward_model_name]
+        has_state_rewards = reward_model.has_state_rewards
+        has_state_action_rewards = reward_model.has_state_action_rewards
 
         if has_state_rewards:
-            return self.stormpy_model.reward_models[reward_model_name].state_rewards[state_id]
-
-        return 0
-
-    def get_state_action_reward(self, index):
-        reward_model_name = list(self.stormpy_model.reward_models.keys())[0]
-        has_state_action_rewards = self.stormpy_model.reward_models[reward_model_name].has_state_action_rewards
+            state_rewards = reward_model.state_rewards
+        else:
+            state_rewards = None
 
         if has_state_action_rewards:
-            return self.stormpy_model.reward_models[reward_model_name].state_action_rewards[index]
+            state_action_rewards = reward_model.state_action_rewards
+        else:
+            state_action_rewards = None
 
-        return 0
+        linear_expr = gp.LinExpr()
+        counter = 0
+        xa_vars = []
+        coeffs = []
+        print("Created objective variables")
+        for state in self.stormpy_model.states:
+            if has_state_rewards:
+                state_reward = state_rewards[state.id]
+            else:
+                state_reward = 0
+
+            for action in state.actions:
+                if has_state_action_rewards:
+                    state_action_reward = state_action_rewards[counter]
+                else:
+                    state_action_reward = 0
+                total_reward = state_reward + state_action_reward
+                xa_vars.append(self.xa_var[state.id, action.id])
+                coeffs.append(total_reward)
+                counter = counter + 1
+
+        print("Computed values")
+
+        linear_expr.addTerms(coeffs, xa_vars)
+        self.gurobi_model.setObjective(linear_expr, GRB.MAXIMIZE)
 
     def solve_lp(self):
         self.gurobi_model.optimize()
