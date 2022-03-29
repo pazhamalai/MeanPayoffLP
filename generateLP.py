@@ -49,6 +49,11 @@ class LPGenerator:
         self.gurobi_model = gp.Model("mdp_lp")
         self.decompositions = stormpy.get_maximal_end_components(self.stormpy_model)
 
+        # For larger models gurobi takes more time, because it also performs Crossover.
+        # So we always use GRB.METHOD_BARRIER and disable Crossover.
+        self.gurobi_model.setParam("Method", GRB.METHOD_BARRIER)
+        self.gurobi_model.setParam("Crossover", 0)
+
     def init_variables(self):
         ya_indices, ya_names = [], []
         xa_indices, xa_names = [], []
@@ -68,16 +73,16 @@ class LPGenerator:
                 xa_indices.append((s.id, a.id))
                 xa_names.append("xa(" + str(s.id) + ", " + str(a.id) + ")")
 
-        self.ya_var = self.gurobi_model.addVars(ya_indices, lb=0.0, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name=ya_names)
+        self.ya_var = self.gurobi_model.addVars(ya_indices, lb=0.0, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS,
+                                                name=ya_names)
         self.xa_var = self.gurobi_model.addVars(xa_indices, lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name=xa_names)
         self.ys_var = self.gurobi_model.addVars(ys_indices, lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name=ys_names)
 
     def populate_lp(self):
         self.add_constraint_1_4_and_objective_function()
-        self.add_constraint_2()
-        self.add_constraint_3()
+        self.add_constraint_2_and_3()
 
-    # Visits each transition once and creates constraints 1, 4 and objective functions
+    # Visits each transition once and populates constraints 1, 4 and objective functions
     # At last adds the constraints and objective function to gurobi model
     def add_constraint_1_4_and_objective_function(self):
         lhs_constraint_1_exprs = [gp.LinExpr() for _ in range(self.stormpy_model.nr_states)]
@@ -92,11 +97,11 @@ class LPGenerator:
         obj_coeffs = []
 
         for state in self.stormpy_model.states:
-            # Add 1 if initial state
+            # Add 1 if initial state for constraint 1
             if state.id in self.stormpy_model.initial_states:
                 lhs_constraint_1_exprs[state.id].addConstant(1)
 
-            # Add ys
+            # Add ys for constraint 1
             rhs_constraint_1_exprs[state.id].add(self.ys_var[state.id])
 
             state_reward = self.get_state_reward(state.id)
@@ -132,6 +137,30 @@ class LPGenerator:
         # Set objective function
         obj_linear_expr.addTerms(obj_coeffs, obj_vars)
         self.gurobi_model.setObjective(obj_linear_expr, GRB.MAXIMIZE)
+
+    def add_constraint_2_and_3(self):
+        constraint_2_expr = gp.LinExpr()
+        mec_index = -1
+        matrix = self.stormpy_model.transition_matrix
+        for mec in self.decompositions:
+            mec_index = mec_index + 1
+
+            constraint_3_lhs_expr = gp.LinExpr()
+            constraint_3_rhs_expr = gp.LinExpr()
+            for state_id, choices in mec:
+                constraint_2_expr.add(self.ys_var[state_id], 1)
+                constraint_3_lhs_expr.add(self.ys_var[state_id], 1)
+
+                offset = matrix.get_row_group_start(state_id)
+                for choice_id in choices:
+                    state = self.stormpy_model.states[state_id]
+                    action = state.actions[choice_id - offset]
+                    constraint_3_rhs_expr.add(self.xa_var[state_id, action.id], 1)
+
+            self.gurobi_model.addLConstr(constraint_3_lhs_expr, GRB.EQUAL, constraint_3_rhs_expr,
+                                         name="C3(" + str(mec_index) + ")")
+
+        self.gurobi_model.addLConstr(constraint_2_expr, GRB.EQUAL, 1, name="C2")
 
     def add_constraint_2(self):
         linear_expr = gp.LinExpr()
