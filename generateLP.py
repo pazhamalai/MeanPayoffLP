@@ -1,4 +1,5 @@
 # Given a model this file generates an LP according to arXiv:1502.00611
+import time
 
 import gurobipy as gp
 import stormpy
@@ -11,6 +12,8 @@ class LPGenerator:
         self.decompositions = None
         self.stormpy_model = model
         self.stormpy_model_name = name
+        self.time_taken_to_populate_lp = None
+        self.time_taken_to_solve_lp = None
 
         # Initialize variables
         self.ya_var = None
@@ -33,10 +36,14 @@ class LPGenerator:
         return self.state_action_rewards[index] if self.has_state_action_rewards else 0
 
     def generate(self):
+        start_time = time.time()
         self.create_gurobi_model()
         self.init_variables()
         self.populate_lp()
+        self.time_taken_to_populate_lp = time.time() - start_time
+        start_time = time.time()
         self.solve_lp()
+        self.time_taken_to_solve_lp = time.time() - start_time
 
     def create_gurobi_model(self):
         self.gurobi_model = gp.Model("mdp_lp")
@@ -181,3 +188,9 @@ class LPGenerator:
                 for t in a.transitions:
                     if t.column == state.id:
                         consumer(s, a, t.value(), t.column)
+
+    def get_time_taken_to_populate_lp(self):
+        return self.time_taken_to_populate_lp
+
+    def get_time_taken_to_solve_lp(self):
+        return self.time_taken_to_solve_lp
