@@ -6,7 +6,7 @@ import stormpy
 from gurobipy import GRB
 
 
-class LPGenerator:
+class LPSolver:
     def __init__(self, model, name=None):
         self.gurobi_model = None
         self.decompositions = None
@@ -35,7 +35,7 @@ class LPGenerator:
     def get_state_action_reward(self, index):
         return self.state_action_rewards[index] if self.has_state_action_rewards else 0
 
-    def generate(self):
+    def solve_mean_payoff(self):
         start_time = time.time()
         self.create_gurobi_model()
         self.init_variables()
@@ -204,7 +204,7 @@ class LPGenerator:
         self.gurobi_model.optimize()
         if self.gurobi_model.status == GRB.OPTIMAL:
             print("Optimal Solution Found")
-            print(self.gurobi_model.ObjVal)
+            print(round(self.gurobi_model.ObjVal, 4))
         else:
             print("No Solution Found")
 
