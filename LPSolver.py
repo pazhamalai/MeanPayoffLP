@@ -42,8 +42,9 @@ class LPSolver:
         self.populate_lp()
         self.time_taken_to_populate_lp = time.time() - start_time
         start_time = time.time()
-        self.solve_lp()
+        result = self.solve_lp()
         self.time_taken_to_solve_lp = time.time() - start_time
+        return result
 
     def create_gurobi_model(self):
         self.gurobi_model = gp.Model("mdp_lp")
@@ -205,8 +206,10 @@ class LPSolver:
         if self.gurobi_model.status == GRB.OPTIMAL:
             print("Optimal Solution Found")
             print(round(self.gurobi_model.ObjVal, 4))
+            return round(self.gurobi_model.ObjVal, 4)
         else:
             print("No Solution Found")
+            return -1
 
     def write_lp(self):
         gp.Model.write(self.gurobi_model, "model.lp")
